@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>課題共有</title>
+<!-- LIFF SDK: LINEの中でユーザー情報を取るためのライブラリ -->
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+  :root {
+    --bg: #F4F6F4; --surface: #FFFFFF; --ink: #1F2823; --muted: #6B7A70;
+    --line: #E1E7E1; --accent: #06C755; --accent-dark: #059A43;
+    --done: #06C755; --doing: #2E86DE; --help: #E67E22; --danger: #D64545;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic UI", Meiryo, sans-serif;
+    font-size: 15px; line-height: 1.6;
+  }
+  .app { max-width: 480px; margin: 0 auto; min-height: 100vh; padding-bottom: 40px; }
+
+  header.bar {
+    position: sticky; top: 0; z-index: 10; background: var(--accent); color: #fff;
+    padding: 12px 16px; display: flex; align-items: center; gap: 10px;
+  }
+  header.bar h1 { font-size: 16px; margin: 0; font-weight: 700; flex: 1; }
+  header.bar button {
+    background: rgba(255,255,255,.2); color: #fff; border: none; border-radius: 6px;
+    padding: 4px 10px; font-size: 13px; cursor: pointer;
+  }
+
+  .screen { display: none; padding: 16px; }
+  .screen.active { display: block; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; margin-bottom: 12px;
+  }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  label { display: block; font-size: 13px; font-weight: 700; color: var(--muted); margin: 12px 0 4px; }
+  input, textarea {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+    font-size: 15px; font-family: inherit; background: var(--surface); color: var(--ink);
+  }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); border-color: transparent; }
+
+  .btn {
+    display: block; width: 100%; padding: 12px; margin-top: 16px;
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    font-size: 15px; font-weight: 700; cursor: pointer;
+  }
+  .btn:active { background: var(--accent-dark); }
+  .btn.ghost { background: var(--surface); color: var(--accent); border: 1.5px solid var(--accent); }
+  .btn.small { width: auto; display: inline-block; padding: 8px 16px; font-size: 13px; margin-top: 0; }
+
+  .room-item, .task-item {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 10px; cursor: pointer;
+  }
+  .room-item:active, .task-item:active { background: var(--bg); }
+  .room-item .name { font-weight: 700; }
+  .room-item .sub, .task-item .sub { font-size: 12.5px; color: var(--muted); }
+
+  .task-item .title { font-weight: 700; display: flex; justify-content: space-between; gap: 8px; }
+  .deadline { font-size: 12.5px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+  .deadline.near { color: var(--danger); }
+
+  .react-row { display: flex; gap: 6px; margin-top: 10px; }
+  .react-btn {
+    flex: 1; padding: 6px 4px; font-size: 12.5px; border-radius: 8px; cursor: pointer;
+    border: 1.5px solid var(--line); background: var(--surface); color: var(--muted);
+  }
+  .react-btn.on-done  { border-color: var(--done);  color: var(--done);  font-weight: 700; background: #EAFBF1; }
+  .react-btn.on-doing { border-color: var(--doing); color: var(--doing); font-weight: 700; background: #EAF3FD; }
+  .react-btn.on-help  { border-color: var(--help);  color: var(--help);  font-weight: 700; background: #FDF3EA; }
+
+  .code-box {
+    font-size: 28px; font-weight: 800; letter-spacing: 0.2em; text-align: center;
+    background: var(--bg); border-radius: 10px; padding: 16px; margin: 12px 0;
+    font-family: ui-monospace, Consolas, monospace;
+  }
+  .members { font-size: 12.5px; color: var(--muted); margin: 4px 0 14px; }
+  .empty { text-align: center; color: var(--muted); padding: 32px 16px; font-size: 14px; }
+  .error { color: var(--danger); font-size: 13.5px; margin-top: 10px; display: none; }
+  .sub-item { border-top: 1px solid var(--line); padding: 10px 0; font-size: 14px; }
+  .sub-item .who { font-weight: 700; font-size: 13px; }
+  .sub-item a { color: var(--doing); word-break: break-all; }
+  .fab-row { display: flex; gap: 8px; margin-bottom: 14px; }
+  .back { color: var(--muted); font-size: 13.5px; cursor: pointer; margin-bottom: 10px; display: inline-block; background: none; border: none; padding: 4px 0; font-family: inherit; }
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: #fff; padding: 10px 20px; border-radius: 99px;
+    font-size: 13.5px; opacity: 0; transition: opacity .25s; pointer-events: none; max-width: 90%;
+  }
+  #toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="bar">
+    <h1 id="bar-title">課題共有</h1>
+    <button id="bar-home" type="button" onclick="showHome()">ホーム</button>
+  </header>
+
+  <!-- S0: 開発モード用の簡易ログイン(本番のLINE内では表示されない) -->
+  <section class="screen" id="s0">
+    <div class="card">
+      <h2>開発モード</h2>
+      <p style="margin:0;font-size:13.5px;color:var(--muted)">LINEなしでテストするための名前を入力してください。</p>
+      <label for="dev-name">テスト用の名前</label>
+      <input id="dev-name" maxlength="20" placeholder="例: たろう">
+      <button class="btn" type="button" onclick="devLogin()">はじめる</button>
+    </div>
+  </section>
+
+  <!-- S1: ホーム(参加ルーム一覧) -->
+  <section class="screen" id="s1">
+    <div class="fab-row">
+      <button class="btn small" type="button" onclick="show('s2')">＋ ルーム作成</button>
+      <button class="btn small ghost" type="button" onclick="show('s3')">コードで入室</button>
+    </div>
+    <div id="room-list"></div>
+  </section>
+
+  <!-- S2: ルーム作成 -->
+  <section class="screen" id="s2">
+    <button class="back" type="button" onclick="showHome()">← ホームへ戻る</button>
+    <div class="card">
+      <h2>ルームを作成</h2>
+      <label for="c-name">ルーム名</label>
+      <input id="c-name" maxlength="30" placeholder="例: 情報工学科1年 6人組">
+      <label for="c-pass">合言葉(入室に必要・4文字以上)</label>
+      <input id="c-pass" placeholder="例: kadai2026">
+      <p class="error" id="c-error"></p>
+      <button class="btn" type="button" onclick="createRoom()">作成する</button>
+    </div>
+    <div class="card" id="c-result" style="display:none">
+      <h2>作成できました 🎉</h2>
+      <p style="margin:0">この<b>招待コード</b>と<b>合言葉</b>をメンバーに伝えてください。</p>
+      <div class="code-box" id="c-code"></div>
+      <button class="btn" type="button" onclick="showHome()">ホームへ</button>
+    </div>
+  </section>
+
+  <!-- S3: ルーム検索・入室 -->
+  <section class="screen" id="s3">
+    <button class="back" type="button" onclick="showHome()">← ホームへ戻る</button>
+    <div class="card">
+      <h2>ルームに入室</h2>
+      <label for="j-code">招待コード</label>
+      <input id="j-code" maxlength="6" placeholder="例: A3K9XM" style="text-transform:uppercase">
+      <label for="j-pass">合言葉</label>
+      <input id="j-pass">
+      <p class="error" id="j-error"></p>
+      <button class="btn" type="button" onclick="joinRoom()">入室する</button>
+    </div>
+  </section>
+
+  <!-- S4: 課題一覧 -->
+  <section class="screen" id="s4">
+    <button class="back" type="button" onclick="showHome()">← ホームへ戻る</button>
+    <div class="members" id="t-members"></div>
+    <button class="btn small" type="button" onclick="show('s5')" style="margin-bottom:14px">＋ 課題を登録</button>
+    <div id="task-list"></div>
+  </section>
+
+  <!-- S5: 課題登録 -->
+  <section class="screen" id="s5">
+    <button class="back" type="button" onclick="openRoom(state.roomId)">← 課題一覧へ戻る</button>
+    <div class="card">
+      <h2>課題を登録</h2>
+      <label for="n-title">課題名</label>
+      <input id="n-title" maxlength="100" placeholder="例: 論理回路 レポート3">
+      <label for="n-deadline">〆切</label>
+      <input id="n-deadline" type="datetime-local">
+      <label for="n-desc">メモ(任意)</label>
+      <textarea id="n-desc" rows="3" placeholder="例: eシラバスから提出。表紙必要"></textarea>
+      <p class="error" id="n-error"></p>
+      <button class="btn" type="button" onclick="createTask()">登録して共有する</button>
+    </div>
+  </section>
+
+  <!-- S6: 課題詳細・提出 -->
+  <section class="screen" id="s6">
+    <button class="back" type="button" onclick="openRoom(state.roomId)">← 課題一覧へ戻る</button>
+    <div class="card" id="d-info"></div>
+    <div class="card">
+      <h2>提出物を共有</h2>
+      <label for="d-url">共有リンク(OneDrive等・任意)</label>
+      <input id="d-url" placeholder="https://...">
+      <label for="d-comment">コメント(任意)</label>
+      <input id="d-comment" placeholder="例: 問3は教科書p.42参照">
+      <p class="error" id="d-error"></p>
+      <button class="btn" type="button" onclick="submitWork()">共有する</button>
+    </div>
+    <div class="card">
+      <h2>みんなの提出物</h2>
+      <div id="d-subs"></div>
+    </div>
+  </section>
+
+  <div id="toast" role="status"></div>
+</div>
+
+<script>
+// ================= 状態と共通処理 =================
+const state = { idToken: null, devUser: null, roomId: null, taskId: null };
+
+// APIを呼ぶ共通関数。認証ヘッダーを自動で付ける
+async function api(path, options = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (state.idToken) headers["Authorization"] = "Bearer " + state.idToken;
+  // ヘッダーに日本語は直接入れられないのでURLエンコードして送る(サーバー側でデコード)
+  if (state.devUser) headers["X-Dev-User"] = encodeURIComponent(state.devUser);
+  const res = await fetch(path, { ...options, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "通信エラーが発生しました");
+  return data;
+}
+
+function show(id) {
+  document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+  window.scrollTo(0, 0);
+}
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2200);
+}
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  el.textContent = msg; el.style.display = "block";
+}
+function clearError(id) { document.getElementById(id).style.display = "none"; }
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// ================= 起動: LIFF初期化 =================
+async function boot() {
+  const conf = await (await fetch("/api/config")).json();
+  if (conf.liff_id) {
+    // 本番: LINEの中で開かれたとき
+    await liff.init({ liffId: conf.liff_id });
+    if (!liff.isLoggedIn()) { liff.login(); return; }
+    state.idToken = liff.getIDToken();
+  } else if (conf.dev_mode) {
+    // 開発: LINEなしでブラウザから試すとき(名前を入力する画面を出す)
+    const saved = localStorage.getItem("devUser");
+    if (!saved) { show("s0"); return; }
+    state.devUser = saved;
+  } else {
+    document.body.innerHTML = "<p style='padding:24px'>設定エラー: LIFF_IDが未設定です。</p>";
+    return;
+  }
+  await api("/api/users", { method: "POST" });
+  showHome();
+}
+
+// 開発モードのログイン(S0)
+async function devLogin() {
+  try {
+    const name = document.getElementById("dev-name").value.trim() || "たろう";
+    localStorage.setItem("devUser", name);
+    state.devUser = name;
+    await api("/api/users", { method: "POST" });
+    showHome();
+  } catch (e) { toast(e.message); }
+}
+
+// ================= S1: ホーム =================
+async function showHome() {
+  show("s1");
+  document.getElementById("bar-title").textContent = "課題共有";
+  const data = await api("/api/me/rooms");
+  const list = document.getElementById("room-list");
+  if (data.rooms.length === 0) {
+    list.innerHTML = "<div class='empty'>まだルームがありません。<br>「ルーム作成」か「コードで入室」から始めよう!</div>";
+    return;
+  }
+  list.innerHTML = data.rooms.map(r => `
+    <div class="room-item" onclick="openRoom('${esc(r.room_id)}')">
+      <div class="name">${esc(r.room_name)}</div>
+      <div class="sub">コード: ${esc(r.room_id)} ・ ${r.members}人</div>
+    </div>`).join("");
+}
+
+// ================= S2: ルーム作成 =================
+async function createRoom() {
+  clearError("c-error");
+  try {
+    const data = await api("/api/rooms", {
+      method: "POST",
+      body: JSON.stringify({
+        room_name: document.getElementById("c-name").value,
+        room_pass: document.getElementById("c-pass").value,
+      }),
+    });
+    document.getElementById("c-code").textContent = data.room_id;
+    document.getElementById("c-result").style.display = "block";
+  } catch (e) { showError("c-error", e.message); }
+}
+
+// ================= S3: 入室 =================
+async function joinRoom() {
+  clearError("j-error");
+  try {
+    const data = await api("/api/rooms/join", {
+      method: "POST",
+      body: JSON.stringify({
+        room_id: document.getElementById("j-code").value,
+        room_pass: document.getElementById("j-pass").value,
+      }),
+    });
+    toast(`「${data.room_name}」に入室しました`);
+    openRoom(data.room_id);
+  } catch (e) { showError("j-error", e.message); }
+}
+
+// ================= S4: 課題一覧 =================
+function fmtDeadline(iso) {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+async function openRoom(roomId) {
+  state.roomId = roomId;
+  show("s4");
+  const data = await api(`/api/rooms/${roomId}/tasks`);
+  document.getElementById("bar-title").textContent = data.room.room_name;
+  document.getElementById("t-members").textContent = "メンバー: " + data.members.join("、");
+  const list = document.getElementById("task-list");
+  if (data.tasks.length === 0) {
+    list.innerHTML = "<div class='empty'>課題はまだありません。<br>最初の1件を登録しよう!</div>";
+    return;
+  }
+  const soon = Date.now() + 48 * 3600 * 1000; // 48時間以内は赤表示
+  list.innerHTML = data.tasks.map(t => `
+    <div class="task-item">
+      <div onclick="openTask(${t.task_id})">
+        <div class="title">
+          <span>${esc(t.title)}</span>
+          <span class="deadline ${new Date(t.deadline) < soon ? "near" : ""}">〆 ${fmtDeadline(t.deadline)}</span>
+        </div>
+        <div class="sub">登録: ${esc(t.created_by_name)}${t.submission_count ? ` ・ 提出物 ${t.submission_count}件` : ""}</div>
+      </div>
+      <div class="react-row">
+        <button type="button" class="react-btn ${t.my_reaction === "done" ? "on-done" : ""}"
+          onclick="react(${t.task_id}, 'done')">✅ 終わった ${t.reactions.done || ""}</button>
+        <button type="button" class="react-btn ${t.my_reaction === "doing" ? "on-doing" : ""}"
+          onclick="react(${t.task_id}, 'doing')">✍️ やってる ${t.reactions.doing || ""}</button>
+        <button type="button" class="react-btn ${t.my_reaction === "help" ? "on-help" : ""}"
+          onclick="react(${t.task_id}, 'help')">🆘 助けて ${t.reactions.help || ""}</button>
+      </div>
+    </div>`).join("");
+}
+async function react(taskId, type) {
+  try {
+    await api(`/api/tasks/${taskId}/reactions`, { method: "POST", body: JSON.stringify({ type }) });
+    openRoom(state.roomId); // 一覧を再読み込みして数字を更新
+  } catch (e) { toast(e.message); }
+}
+
+// ================= S5: 課題登録 =================
+async function createTask() {
+  clearError("n-error");
+  try {
+    await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        room_id: state.roomId,
+        title: document.getElementById("n-title").value,
+        deadline: document.getElementById("n-deadline").value,
+        description: document.getElementById("n-desc").value,
+      }),
+    });
+    toast("課題を共有しました 📚");
+    document.getElementById("n-title").value = "";
+    document.getElementById("n-desc").value = "";
+    openRoom(state.roomId);
+  } catch (e) { showError("n-error", e.message); }
+}
+
+// ================= S6: 課題詳細・提出 =================
+async function openTask(taskId) {
+  state.taskId = taskId;
+  show("s6");
+  const data = await api(`/api/tasks/${taskId}`);
+  const t = data.task;
+  document.getElementById("d-info").innerHTML = `
+    <h2>${esc(t.title)}</h2>
+    <div class="sub" style="color:var(--muted);font-size:13px">
+      〆切: ${fmtDeadline(t.deadline)} ・ 登録: ${esc(t.created_by_name)}
+    </div>
+    ${t.description ? `<p style="margin:10px 0 0">${esc(t.description)}</p>` : ""}`;
+  const subs = document.getElementById("d-subs");
+  subs.innerHTML = data.submissions.length === 0
+    ? "<div class='empty'>まだ提出物はありません</div>"
+    : data.submissions.map(s => `
+      <div class="sub-item">
+        <div class="who">${esc(s.display_name)} <span style="color:var(--muted);font-weight:400">${esc(s.submitted_at.slice(5, 16).replace("T", " "))}</span></div>
+        ${s.file_url ? `<a href="${esc(s.file_url)}" target="_blank" rel="noopener">${esc(s.file_url)}</a>` : ""}
+        ${s.comment ? `<div>${esc(s.comment)}</div>` : ""}
+      </div>`).join("");
+}
+async function submitWork() {
+  clearError("d-error");
+  try {
+    await api(`/api/tasks/${state.taskId}/submissions`, {
+      method: "POST",
+      body: JSON.stringify({
+        file_url: document.getElementById("d-url").value,
+        comment: document.getElementById("d-comment").value,
+      }),
+    });
+    toast("提出物を共有しました ✅");
+    document.getElementById("d-url").value = "";
+    document.getElementById("d-comment").value = "";
+    openTask(state.taskId);
+  } catch (e) { showError("d-error", e.message); }
+}
+
+boot().catch(e => { document.body.innerHTML = `<p style='padding:24px'>起動エラー: ${esc(e.message)}</p>`; });
+</script>
+</body>
+</html>
