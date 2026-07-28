@@ -39,16 +39,19 @@ python -m pytest -v
 
 `tests/test_api.py` が全APIの正常系・異常系(権限チェック含む)を自動で確認する。
 
-## 公開して LIFF に貼るURLを作る(Render)
+## 公開して LIFF に貼るURLを作る(Neon + Render)
 
-1. このリポジトリをGitHubにpushする
-2. [Render](https://render.com) で **New → Web Service** → このリポジトリを選択
-   - Build Command: `pip install -r requirements.txt`
-   - Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-3. **Environment** に以下を設定(値はLINE Developersからコピー)
-   - `LIFF_ID` / `LINE_LOGIN_CHANNEL_ID` / `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET`
+DBはローカルではSQLite、本番では `DATABASE_URL` を設定するとPostgreSQL(Neon)に自動で切り替わる。
+Render無料プランは再起動でファイルが消えるため、データは外部のNeonに置く構成。
+
+1. [Neon](https://neon.tech) で無料のPostgreSQLを作成し、接続文字列(`postgresql://...`)をコピー
+2. このリポジトリをGitHubにpushする
+3. [Render](https://render.com) で **New → Blueprint** → このリポジトリを選択(`render.yaml` が自動で読まれる)
+4. 環境変数の入力を求められるので設定:
+   - `DATABASE_URL`: Neonの接続文字列
+   - `LIFF_ID` / `LINE_LOGIN_CHANNEL_ID` / `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_CHANNEL_SECRET`(LINE Developersからコピー)
    - `DEV_MODE` は設定しない(本番ではOFF)
-4. デプロイ完了で `https://〇〇.onrender.com` というURLがもらえる
+5. デプロイ完了で `https://〇〇.onrender.com` というURLがもらえる
 
 ## LINE Developers 側の設定
 

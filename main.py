@@ -34,6 +34,13 @@ MESSAGING_TOKEN = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")  # Push通知�
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")  # Webhook署名検証に使う
 DEV_MODE = os.environ.get("DEV_MODE", "0") == "1"           # ローカル開発用(LINEなしで動く)
 DB_PATH = os.environ.get("DB_PATH", "sekipro.db")
+# 本番(Render)ではNeonのPostgreSQLを使う。設定がなければローカル用のSQLite
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+USE_PG = DATABASE_URL.startswith("postgres")
+
+if USE_PG:
+    import psycopg
+    from psycopg.rows import dict_row
 
 JST = timezone(timedelta(hours=9))
 
@@ -41,71 +48,96 @@ app = FastAPI(title="セキプロ 課題共有API")
 
 
 # ---- データベース --------------------------------------------
-def db():
-    """SQLiteに接続する。row_factoryで結果を辞書風に扱えるようにする"""
+# SQLite(ローカル)と PostgreSQL(本番)は書き方が少しだけ違う。
+# この薄いラッパーが「?」→「%s」の置き換えを吸収して、
+# APIのコードはどちらでも同じ書き方で済むようにする。
+class Conn:
+    def __init__(self, raw):
+        self.raw = raw
+
+    def execute(self, sql: str, params=()):
+        if USE_PG:
+            sql = sql.replace("?", "%s")  # プレースホルダの方言差を吸収
+        return self.raw.execute(sql, params)
+
+    def commit(self):
+        self.raw.commit()
+
+    def close(self):
+        self.raw.close()
+
+
+def db() -> Conn:
+    """DBに接続する。結果はどちらのDBでも row["列名"] で取れる"""
+    if USE_PG:
+        return Conn(psycopg.connect(DATABASE_URL, row_factory=dict_row))
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return Conn(conn)
 
 
 def init_db():
     """設計書 §4 のスキーマどおりにテーブルを作る(なければ)"""
+    # 連番の主キーだけ書き方が違うので、ここで切り替える
+    pk = "SERIAL PRIMARY KEY" if USE_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
+    statements = [
+        """CREATE TABLE IF NOT EXISTS users (
+            user_id      TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            created_at   TEXT NOT NULL
+        )""",
+        """CREATE TABLE IF NOT EXISTS rooms (
+            room_id        TEXT PRIMARY KEY,
+            room_name      TEXT NOT NULL,
+            room_pass_hash TEXT NOT NULL,
+            created_by     TEXT NOT NULL REFERENCES users(user_id),
+            created_at     TEXT NOT NULL
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS room_users (
+            id        {pk},
+            room_id   TEXT NOT NULL REFERENCES rooms(room_id),
+            user_id   TEXT NOT NULL REFERENCES users(user_id),
+            joined_at TEXT NOT NULL,
+            UNIQUE(room_id, user_id)
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS tasks (
+            task_id     {pk},
+            room_id     TEXT NOT NULL REFERENCES rooms(room_id),
+            created_by  TEXT NOT NULL REFERENCES users(user_id),
+            title       TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            deadline    TEXT NOT NULL,
+            created_at  TEXT NOT NULL
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS reactions (
+            reaction_id {pk},
+            task_id     INTEGER NOT NULL REFERENCES tasks(task_id),
+            user_id     TEXT NOT NULL REFERENCES users(user_id),
+            type        TEXT NOT NULL CHECK(type IN ('done','doing','help')),
+            created_at  TEXT NOT NULL,
+            UNIQUE(task_id, user_id)
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS assignments (
+            assignment_id {pk},
+            task_id       INTEGER NOT NULL REFERENCES tasks(task_id),
+            user_id       TEXT NOT NULL REFERENCES users(user_id),
+            part          TEXT NOT NULL DEFAULT '',
+            created_at    TEXT NOT NULL,
+            UNIQUE(task_id, user_id)
+        )""",
+        f"""CREATE TABLE IF NOT EXISTS submissions (
+            submission_id {pk},
+            task_id       INTEGER NOT NULL REFERENCES tasks(task_id),
+            user_id       TEXT NOT NULL REFERENCES users(user_id),
+            file_url      TEXT NOT NULL DEFAULT '',
+            comment       TEXT NOT NULL DEFAULT '',
+            submitted_at  TEXT NOT NULL
+        )""",
+    ]
     conn = db()
-    conn.executescript("""
-    CREATE TABLE IF NOT EXISTS users (
-        user_id      TEXT PRIMARY KEY,          -- LINEのuserIdをそのまま主キーに
-        display_name TEXT NOT NULL,
-        created_at   TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS rooms (
-        room_id        TEXT PRIMARY KEY,        -- 6桁の招待コード
-        room_name      TEXT NOT NULL,
-        room_pass_hash TEXT NOT NULL,           -- 合言葉はハッシュで保存(平文NG)
-        created_by     TEXT NOT NULL REFERENCES users(user_id),
-        created_at     TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS room_users (
-        id        INTEGER PRIMARY KEY AUTOINCREMENT,
-        room_id   TEXT NOT NULL REFERENCES rooms(room_id),
-        user_id   TEXT NOT NULL REFERENCES users(user_id),
-        joined_at TEXT NOT NULL,
-        UNIQUE(room_id, user_id)                -- 二重入室をDBで防ぐ
-    );
-    CREATE TABLE IF NOT EXISTS tasks (
-        task_id     INTEGER PRIMARY KEY AUTOINCREMENT,
-        room_id     TEXT NOT NULL REFERENCES rooms(room_id),
-        created_by  TEXT NOT NULL REFERENCES users(user_id),
-        title       TEXT NOT NULL,
-        description TEXT NOT NULL DEFAULT '',
-        deadline    TEXT NOT NULL,              -- ISO形式 "2026-07-20T23:59"
-        created_at  TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS reactions (
-        reaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id     INTEGER NOT NULL REFERENCES tasks(task_id),
-        user_id     TEXT NOT NULL REFERENCES users(user_id),
-        type        TEXT NOT NULL CHECK(type IN ('done','doing','help')),
-        created_at  TEXT NOT NULL,
-        UNIQUE(task_id, user_id)                -- 1課題1人1リアクション
-    );
-    CREATE TABLE IF NOT EXISTS assignments (
-        assignment_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id       INTEGER NOT NULL REFERENCES tasks(task_id),
-        user_id       TEXT NOT NULL REFERENCES users(user_id),
-        part          TEXT NOT NULL DEFAULT '',  -- 担当範囲メモ 例:「問1〜3」
-        created_at    TEXT NOT NULL,
-        UNIQUE(task_id, user_id)                -- 1課題につき担当登録は1人1件
-    );
-    CREATE TABLE IF NOT EXISTS submissions (
-        submission_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        task_id       INTEGER NOT NULL REFERENCES tasks(task_id),
-        user_id       TEXT NOT NULL REFERENCES users(user_id),
-        file_url      TEXT NOT NULL DEFAULT '',
-        comment       TEXT NOT NULL DEFAULT '',
-        submitted_at  TEXT NOT NULL
-    );
-    """)
+    for s in statements:
+        conn.execute(s)
     conn.commit()
     conn.close()
 
@@ -326,7 +358,8 @@ def join_room(body: RoomJoin, authorization: str | None = Header(None), x_dev_us
         conn.close()
         raise HTTPException(404, "roomが見つかりませんでした")
     conn.execute(
-        "INSERT OR IGNORE INTO room_users(room_id, user_id, joined_at) VALUES(?,?,?)",
+        """INSERT INTO room_users(room_id, user_id, joined_at) VALUES(?,?,?)
+           ON CONFLICT(room_id, user_id) DO NOTHING""",
         (room["room_id"], user["user_id"], now_iso()),
     )
     conn.commit()
@@ -400,12 +433,13 @@ def create_task(body: TaskCreate, authorization: str | None = Header(None), x_de
         raise HTTPException(400, "〆切の日時の形式が正しくありません")
     conn = db()
     require_member(conn, body.room_id, user["user_id"])
+    # RETURNING で登録した行のIDをそのまま受け取る(SQLite/PostgreSQL共通の書き方)
     cur = conn.execute(
-        "INSERT INTO tasks(room_id, created_by, title, description, deadline, created_at) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO tasks(room_id, created_by, title, description, deadline, created_at) VALUES(?,?,?,?,?,?) RETURNING task_id",
         (body.room_id, user["user_id"], body.title.strip(), body.description.strip(),
          deadline.strftime("%Y-%m-%dT%H:%M"), now_iso()),
     )
-    task_id = cur.lastrowid
+    task_id = cur.fetchone()["task_id"]
     conn.commit()
     conn.close()
     push_to_members(

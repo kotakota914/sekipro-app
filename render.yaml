@@ -1,0 +1,21 @@
+# Render の設定ファイル (Blueprint)
+# Render がこのファイルを読んで、ビルド方法・起動方法を自動設定してくれる
+services:
+  - type: web
+    name: sekipro-app
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      # sync: false = 値はGitHubに置かず、Renderの管理画面で手入力する(秘密情報のため)
+      - key: DATABASE_URL
+        sync: false
+      - key: LIFF_ID
+        sync: false
+      - key: LINE_LOGIN_CHANNEL_ID
+        sync: false
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
