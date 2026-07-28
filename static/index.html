@@ -65,6 +65,22 @@
   .task-item .title { font-weight: 700; display: flex; justify-content: space-between; gap: 8px; }
   .deadline { font-size: 12.5px; font-weight: 700; color: var(--muted); white-space: nowrap; }
   .deadline.near { color: var(--danger); }
+  .deadline.over { color: var(--muted); }
+  .task-item.over { opacity: .65; }
+  .task-item.over .title span:first-child { text-decoration: line-through; }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 8px;
+    border-radius: 99px; margin-left: 6px; vertical-align: 1px;
+  }
+  .badge.over { background: var(--line); color: var(--muted); }
+  .badge.near { background: #FBEAEA; color: var(--danger); }
+  .assignee-row { font-size: 12.5px; color: var(--doing); margin-top: 4px; }
+  .btn.danger { background: var(--surface); color: var(--danger); border: 1.5px solid var(--danger); }
+  .task-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .task-actions .btn { margin-top: 0; flex: 1; padding: 9px; font-size: 13.5px; }
+  .assign-item { display: flex; justify-content: space-between; font-size: 14px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .assign-item:first-child { border-top: none; }
+  .assign-item .part { color: var(--muted); font-size: 13px; }
 
   .react-row { display: flex; gap: 6px; margin-top: 10px; }
   .react-btn {
@@ -161,7 +177,7 @@
   <section class="screen" id="s4">
     <button class="back" type="button" onclick="showHome()">← ホームへ戻る</button>
     <div class="members" id="t-members"></div>
-    <button class="btn small" type="button" onclick="show('s5')" style="margin-bottom:14px">＋ 課題を登録</button>
+    <button class="btn small" type="button" onclick="openTaskForm()" style="margin-bottom:14px">＋ 課題を登録</button>
     <div id="task-list"></div>
   </section>
 
@@ -169,7 +185,7 @@
   <section class="screen" id="s5">
     <button class="back" type="button" onclick="openRoom(state.roomId)">← 課題一覧へ戻る</button>
     <div class="card">
-      <h2>課題を登録</h2>
+      <h2 id="n-heading">課題を登録</h2>
       <label for="n-title">課題名</label>
       <input id="n-title" maxlength="100" placeholder="例: 論理回路 レポート3">
       <label for="n-deadline">〆切</label>
@@ -177,7 +193,7 @@
       <label for="n-desc">メモ(任意)</label>
       <textarea id="n-desc" rows="3" placeholder="例: eシラバスから提出。表紙必要"></textarea>
       <p class="error" id="n-error"></p>
-      <button class="btn" type="button" onclick="createTask()">登録して共有する</button>
+      <button class="btn" type="button" id="n-submit" onclick="saveTask()">登録して共有する</button>
     </div>
   </section>
 
@@ -185,6 +201,13 @@
   <section class="screen" id="s6">
     <button class="back" type="button" onclick="openRoom(state.roomId)">← 課題一覧へ戻る</button>
     <div class="card" id="d-info"></div>
+    <div class="card">
+      <h2>分担 🙋</h2>
+      <div id="d-assignees"></div>
+      <label for="d-part">自分の担当範囲(任意)</label>
+      <input id="d-part" maxlength="50" placeholder="例: 問1〜3、資料の前半">
+      <button class="btn" type="button" id="d-assign-btn" onclick="toggleAssign()">担当する</button>
+    </div>
     <div class="card">
       <h2>提出物を共有</h2>
       <label for="d-url">共有リンク(OneDrive等・任意)</label>
@@ -336,15 +359,24 @@ async function openRoom(roomId) {
     list.innerHTML = "<div class='empty'>課題はまだありません。<br>最初の1件を登録しよう!</div>";
     return;
   }
-  const soon = Date.now() + 48 * 3600 * 1000; // 48時間以内は赤表示
-  list.innerHTML = data.tasks.map(t => `
-    <div class="task-item">
+  const now = Date.now();
+  const soon = now + 48 * 3600 * 1000; // 48時間以内は赤表示
+  list.innerHTML = data.tasks.map(t => {
+    const dl = new Date(t.deadline).getTime();
+    const over = dl < now;                      // 期限切れ
+    const near = !over && dl < soon;            // 〆切48時間以内
+    const assignLine = t.assignees.length
+      ? `<div class="assignee-row">🙋 担当: ${t.assignees.map(a => esc(a.name) + (a.part ? `(${esc(a.part)})` : "")).join("、")}</div>`
+      : "";
+    return `
+    <div class="task-item ${over ? "over" : ""}">
       <div onclick="openTask(${t.task_id})">
         <div class="title">
           <span>${esc(t.title)}</span>
-          <span class="deadline ${new Date(t.deadline) < soon ? "near" : ""}">〆 ${fmtDeadline(t.deadline)}</span>
+          <span class="deadline ${over ? "over" : near ? "near" : ""}">〆 ${fmtDeadline(t.deadline)}${over ? '<span class="badge over">期限切れ</span>' : near ? '<span class="badge near">急いで!</span>' : ""}</span>
         </div>
         <div class="sub">登録: ${esc(t.created_by_name)}${t.submission_count ? ` ・ 提出物 ${t.submission_count}件` : ""}</div>
+        ${assignLine}
       </div>
       <div class="react-row">
         <button type="button" class="react-btn ${t.my_reaction === "done" ? "on-done" : ""}"
@@ -354,7 +386,8 @@ async function openRoom(roomId) {
         <button type="button" class="react-btn ${t.my_reaction === "help" ? "on-help" : ""}"
           onclick="react(${t.task_id}, 'help')">🆘 助けて ${t.reactions.help || ""}</button>
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 }
 async function react(taskId, type) {
   try {
@@ -363,24 +396,59 @@ async function react(taskId, type) {
   } catch (e) { toast(e.message); }
 }
 
-// ================= S5: 課題登録 =================
-async function createTask() {
+// ================= S5: 課題登録・編集 =================
+// 新規登録用にフォームを空にして開く
+function openTaskForm() {
+  state.editTaskId = null;
+  document.getElementById("n-heading").textContent = "課題を登録";
+  document.getElementById("n-submit").textContent = "登録して共有する";
+  document.getElementById("n-title").value = "";
+  document.getElementById("n-deadline").value = "";
+  document.getElementById("n-desc").value = "";
   clearError("n-error");
+  show("s5");
+}
+
+// 編集用に今の値を入れて開く
+function openTaskEdit(task) {
+  state.editTaskId = task.task_id;
+  document.getElementById("n-heading").textContent = "課題を編集";
+  document.getElementById("n-submit").textContent = "変更を保存する";
+  document.getElementById("n-title").value = task.title;
+  document.getElementById("n-deadline").value = task.deadline;
+  document.getElementById("n-desc").value = task.description;
+  clearError("n-error");
+  show("s5");
+}
+
+// 新規なら POST、編集中なら PUT に振り分ける
+async function saveTask() {
+  clearError("n-error");
+  const body = {
+    room_id: state.roomId,
+    title: document.getElementById("n-title").value,
+    deadline: document.getElementById("n-deadline").value,
+    description: document.getElementById("n-desc").value,
+  };
   try {
-    await api("/api/tasks", {
-      method: "POST",
-      body: JSON.stringify({
-        room_id: state.roomId,
-        title: document.getElementById("n-title").value,
-        deadline: document.getElementById("n-deadline").value,
-        description: document.getElementById("n-desc").value,
-      }),
-    });
-    toast("課題を共有しました 📚");
-    document.getElementById("n-title").value = "";
-    document.getElementById("n-desc").value = "";
+    if (state.editTaskId) {
+      await api(`/api/tasks/${state.editTaskId}`, { method: "PUT", body: JSON.stringify(body) });
+      toast("課題を更新しました ✏️");
+    } else {
+      await api("/api/tasks", { method: "POST", body: JSON.stringify(body) });
+      toast("課題を共有しました 📚");
+    }
     openRoom(state.roomId);
   } catch (e) { showError("n-error", e.message); }
+}
+
+async function deleteTask(taskId, title) {
+  if (!confirm(`「${title}」を削除しますか?\nリアクションや提出物も一緒に消えます。`)) return;
+  try {
+    await api(`/api/tasks/${taskId}`, { method: "DELETE" });
+    toast("課題を削除しました 🗑");
+    openRoom(state.roomId);
+  } catch (e) { toast(e.message); }
 }
 
 // ================= S6: 課題詳細・提出 =================
@@ -389,12 +457,31 @@ async function openTask(taskId) {
   show("s6");
   const data = await api(`/api/tasks/${taskId}`);
   const t = data.task;
+  state.currentTask = t;  // 編集ボタンで使う
   document.getElementById("d-info").innerHTML = `
     <h2>${esc(t.title)}</h2>
     <div class="sub" style="color:var(--muted);font-size:13px">
       〆切: ${fmtDeadline(t.deadline)} ・ 登録: ${esc(t.created_by_name)}
     </div>
-    ${t.description ? `<p style="margin:10px 0 0">${esc(t.description)}</p>` : ""}`;
+    ${t.description ? `<p style="margin:10px 0 0">${esc(t.description)}</p>` : ""}
+    ${t.is_mine ? `
+    <div class="task-actions">
+      <button class="btn ghost" type="button" onclick="openTaskEdit(state.currentTask)">✏️ 編集</button>
+      <button class="btn danger" type="button" onclick="deleteTask(${t.task_id}, state.currentTask.title)">🗑 削除</button>
+    </div>` : ""}`;
+
+  // ---- 分担カード ----
+  state.myAssigned = !!data.my_assignment;
+  document.getElementById("d-assignees").innerHTML = data.assignees.length === 0
+    ? "<div class='empty' style='padding:8px'>まだ担当者はいません</div>"
+    : data.assignees.map(a => `
+      <div class="assign-item">
+        <span>🙋 ${esc(a.name)}</span>
+        ${a.part ? `<span class="part">${esc(a.part)}</span>` : ""}
+      </div>`).join("");
+  document.getElementById("d-part").value = data.my_assignment ? data.my_assignment.part : "";
+  document.getElementById("d-assign-btn").textContent = state.myAssigned ? "担当をやめる" : "担当する";
+  document.getElementById("d-assign-btn").className = state.myAssigned ? "btn danger" : "btn";
   const subs = document.getElementById("d-subs");
   subs.innerHTML = data.submissions.length === 0
     ? "<div class='empty'>まだ提出物はありません</div>"
@@ -405,6 +492,23 @@ async function openTask(taskId) {
         ${s.comment ? `<div>${esc(s.comment)}</div>` : ""}
       </div>`).join("");
 }
+// 「担当する/やめる」ボタン (UC3)
+async function toggleAssign() {
+  try {
+    if (state.myAssigned) {
+      await api(`/api/tasks/${state.taskId}/assignment`, { method: "DELETE" });
+      toast("担当をやめました");
+    } else {
+      await api(`/api/tasks/${state.taskId}/assignment`, {
+        method: "POST",
+        body: JSON.stringify({ part: document.getElementById("d-part").value }),
+      });
+      toast("担当になりました 🙋");
+    }
+    openTask(state.taskId);  // 表示を最新にする
+  } catch (e) { toast(e.message); }
+}
+
 async function submitWork() {
   clearError("d-error");
   try {

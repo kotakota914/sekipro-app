@@ -1,0 +1,5 @@
+# 開発時だけ必要なライブラリ (テスト用)
+# インストール: pip install -r requirements-dev.txt
+-r requirements.txt
+pytest
+httpx

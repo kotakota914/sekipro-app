@@ -89,6 +89,14 @@ def init_db():
         created_at  TEXT NOT NULL,
         UNIQUE(task_id, user_id)                -- 1課題1人1リアクション
     );
+    CREATE TABLE IF NOT EXISTS assignments (
+        assignment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id       INTEGER NOT NULL REFERENCES tasks(task_id),
+        user_id       TEXT NOT NULL REFERENCES users(user_id),
+        part          TEXT NOT NULL DEFAULT '',  -- 担当範囲メモ 例:「問1〜3」
+        created_at    TEXT NOT NULL,
+        UNIQUE(task_id, user_id)                -- 1課題につき担当登録は1人1件
+    );
     CREATE TABLE IF NOT EXISTS submissions (
         submission_id INTEGER PRIMARY KEY AUTOINCREMENT,
         task_id       INTEGER NOT NULL REFERENCES tasks(task_id),
@@ -226,8 +234,18 @@ class TaskCreate(BaseModel):
     description: str = ""
 
 
+class TaskUpdate(BaseModel):
+    title: str
+    deadline: str
+    description: str = ""
+
+
 class ReactionIn(BaseModel):
     type: str  # done / doing / help
+
+
+class AssignIn(BaseModel):
+    part: str = ""  # 担当範囲メモ(任意)
 
 
 class SubmissionIn(BaseModel):
@@ -348,7 +366,20 @@ def list_tasks(room_id: str, authorization: str | None = Header(None), x_dev_use
         subs = conn.execute(
             "SELECT COUNT(*) AS c FROM submissions WHERE task_id=?", (t["task_id"],)
         ).fetchone()["c"]
-        result.append(dict(t) | {"reactions": counts, "my_reaction": mine["type"] if mine else None, "submission_count": subs})
+        assignees = conn.execute(
+            """SELECT a.user_id, a.part, u.display_name FROM assignments a
+               JOIN users u ON u.user_id=a.user_id WHERE a.task_id=? ORDER BY a.assignment_id""",
+            (t["task_id"],),
+        ).fetchall()
+        my_assign = next((a for a in assignees if a["user_id"] == user["user_id"]), None)
+        result.append(dict(t) | {
+            "reactions": counts,
+            "my_reaction": mine["type"] if mine else None,
+            "submission_count": subs,
+            "assignees": [{"name": a["display_name"], "part": a["part"]} for a in assignees],
+            "my_assignment": {"part": my_assign["part"]} if my_assign else None,
+            "is_mine": t["created_by"] == user["user_id"],
+        })
     conn.close()
     return {
         "room": {"room_id": room_id, "room_name": room["room_name"]},
@@ -382,6 +413,89 @@ def create_task(body: TaskCreate, authorization: str | None = Header(None), x_de
         f"📚 新しい課題が共有されました\n「{body.title.strip()}」\n〆切: {deadline.strftime('%m/%d %H:%M')}\n登録: {user['display_name']}",
     )
     return {"task_id": task_id}
+
+
+def get_task_or_404(conn, task_id: int):
+    task = conn.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
+    if not task:
+        raise HTTPException(404, "課題が見つかりません")
+    return task
+
+
+@app.put("/api/tasks/{task_id}")
+def update_task(task_id: int, body: TaskUpdate, authorization: str | None = Header(None), x_dev_user: str | None = Header(None)):
+    """課題の編集。登録した本人だけができる"""
+    user = auth_and_upsert(authorization, x_dev_user)
+    if not body.title.strip() or len(body.title) > 100:
+        raise HTTPException(400, "課題名は1〜100文字で入力してください")
+    try:
+        deadline = datetime.fromisoformat(body.deadline)
+    except ValueError:
+        raise HTTPException(400, "〆切の日時の形式が正しくありません")
+    conn = db()
+    task = get_task_or_404(conn, task_id)
+    require_member(conn, task["room_id"], user["user_id"])
+    if task["created_by"] != user["user_id"]:
+        raise HTTPException(403, "編集できるのは登録した本人だけです")
+    conn.execute(
+        "UPDATE tasks SET title=?, description=?, deadline=? WHERE task_id=?",
+        (body.title.strip(), body.description.strip(), deadline.strftime("%Y-%m-%dT%H:%M"), task_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/tasks/{task_id}")
+def delete_task(task_id: int, authorization: str | None = Header(None), x_dev_user: str | None = Header(None)):
+    """課題の削除。登録した本人だけができる。ぶら下がるデータも一緒に消す"""
+    user = auth_and_upsert(authorization, x_dev_user)
+    conn = db()
+    task = get_task_or_404(conn, task_id)
+    require_member(conn, task["room_id"], user["user_id"])
+    if task["created_by"] != user["user_id"]:
+        raise HTTPException(403, "削除できるのは登録した本人だけです")
+    # 外部キー制約があるので、子テーブル(リアクション等)から順に消す
+    for table in ("reactions", "assignments", "submissions"):
+        conn.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
+    conn.execute("DELETE FROM tasks WHERE task_id=?", (task_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/tasks/{task_id}/assignment")
+def assign_self(task_id: int, body: AssignIn, authorization: str | None = Header(None), x_dev_user: str | None = Header(None)):
+    """課題の分担 (UC3): 自分を担当者として登録する(登録済みなら担当範囲を更新)"""
+    user = auth_and_upsert(authorization, x_dev_user)
+    if len(body.part) > 50:
+        raise HTTPException(400, "担当範囲は50文字以内で入力してください")
+    conn = db()
+    task = get_task_or_404(conn, task_id)
+    require_member(conn, task["room_id"], user["user_id"])
+    conn.execute(
+        """INSERT INTO assignments(task_id, user_id, part, created_at) VALUES(?,?,?,?)
+           ON CONFLICT(task_id, user_id) DO UPDATE SET part=excluded.part""",
+        (task_id, user["user_id"], body.part.strip(), now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/tasks/{task_id}/assignment")
+def unassign_self(task_id: int, authorization: str | None = Header(None), x_dev_user: str | None = Header(None)):
+    """課題の分担をやめる(自分の担当登録を消す)"""
+    user = auth_and_upsert(authorization, x_dev_user)
+    conn = db()
+    task = get_task_or_404(conn, task_id)
+    require_member(conn, task["room_id"], user["user_id"])
+    conn.execute(
+        "DELETE FROM assignments WHERE task_id=? AND user_id=?", (task_id, user["user_id"])
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True}
 
 
 @app.post("/api/tasks/{task_id}/reactions")
@@ -429,8 +543,19 @@ def task_detail(task_id: int, authorization: str | None = Header(None), x_dev_us
            JOIN users u ON u.user_id=s.user_id WHERE s.task_id=? ORDER BY s.submitted_at DESC""",
         (task_id,),
     ).fetchall()
+    assignees = conn.execute(
+        """SELECT a.user_id, a.part, u.display_name FROM assignments a
+           JOIN users u ON u.user_id=a.user_id WHERE a.task_id=? ORDER BY a.assignment_id""",
+        (task_id,),
+    ).fetchall()
     conn.close()
-    return {"task": dict(task), "submissions": [dict(s) for s in subs]}
+    my_assign = next((a for a in assignees if a["user_id"] == user["user_id"]), None)
+    return {
+        "task": dict(task) | {"is_mine": task["created_by"] == user["user_id"]},
+        "submissions": [dict(s) for s in subs],
+        "assignees": [{"name": a["display_name"], "part": a["part"]} for a in assignees],
+        "my_assignment": {"part": my_assign["part"]} if my_assign else None,
+    }
 
 
 @app.post("/api/tasks/{task_id}/submissions")

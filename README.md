@@ -7,6 +7,15 @@ LINEの中で動く、グループの課題共有アプリ。
 - バックエンド: Python / FastAPI(`main.py`)
 - DB: SQLite(自動で `sekipro.db` が作られる)
 
+## 機能
+
+- **課題の登録・共有**: 課題名・〆切・メモを登録すると、同じルームの全員に表示&LINE通知
+- **課題一覧**: 〆切が近い順に表示。48時間以内は「急いで!」、過ぎたものは「期限切れ」表示
+- **編集・削除**: 登録した本人だけが課題を直したり消したりできる
+- **リアクション**: ✅終わった / ✍️やってる / 🆘助けて をワンタップで共有
+- **分担 (UC3)**: 「担当する」ボタンで自分を担当者に登録。担当範囲メモも書ける
+- **提出物の共有**: OneDrive等のリンク+コメントをルーム内に共有
+
 ## ローカルで動かす(LINE不要の開発モード)
 
 ```powershell
@@ -20,6 +29,15 @@ uvicorn main:app --reload
 
 http://localhost:8000 を開くとテスト用の名前を聞かれ、LINEなしで全機能を試せる。
 APIの仕様書は http://localhost:8000/docs に自動生成される。
+
+## テスト
+
+```powershell
+pip install -r requirements-dev.txt
+python -m pytest -v
+```
+
+`tests/test_api.py` が全APIの正常系・異常系(権限チェック含む)を自動で確認する。
 
 ## 公開して LIFF に貼るURLを作る(Render)
 
